@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css">
+  <title>Caça-Palavras Online</title>
+</head>
+<body>
+  <div class="app">
+    <aside class="controls">
+      <h1>Caça-Palavras</h1>
+      <div class="section">
+        <label>Tamanho (dificuldade)</label>
+        <select id="gridSize">
+          <option value="10">Pequeno — 10x10</option>
+          <option value="12" selected>Médio — 12x12</option>
+          <option value="14">Grande — 14x14</option>
+          <option value="16">Gigante — 16x16</option>
+        </select>
+        <div class="hint">Quanto maior, mais difícil. O tamanho também limita o comprimento máximo das palavras.</div>
+      </div>
+
+      <div class="section">
+        <label>Filtro de categoria</label>
+        <select id="categories"></select>
+      </div>
+      
+      <div class="section">
+        <label>Número de palavras</label>
+        <input type="number" id="wordCount" value="10" min="3" />
+        <div class="hint">Escolha quantas palavras deseja no jogo.</div>
+      </div>
+
+      <div class="section">
+        <label>Controle</label>
+        <div class="toolbar">
+          <button id="startBtn">Iniciar Novo Jogo</button>
+        </div>
+        <div id="status" class="small"></div>
+      </div>
+
+      <div class="section">
+        <label>Banco de palavras</label>
+        <div id="bankList" style="max-height:220px; overflow:auto"></div>
+      </div>
+    </aside>
+
+    <main>
+      <div id="gridWrap">
+        <div style="flex:1">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
+            <div>
+              <strong>Jogo</strong>
+              <div class="small">Segure o botão do mouse e arraste para selecionar (horizontal, vertical e diagonal).</div>
+              <div class="game-info">
+                <div class="timer">
+                    Tempo: <span id="hours-live">00</span>:<span id="minutes-live">00</span>:<span id="seconds-live">00</span>
+                </div>
+            </div>
+            </div>
+            <div>
+              <button id="showAllBtn">Mostrar palavras</button>
+            </div>
+          </div>
+
+          <div id="grid" class="grid" style="margin-top:12px"></div>
+        </div>
+
+        <aside style="width:260px">
+          <h3>Palavras</h3>
+          <div id="wordsToFind" class="wordsList"></div>
+          <div style="margin-top:12px">
+            <strong>Encontradas:</strong> <span id="foundCount">0</span> / <span id="totalCount">0</span>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <div id="winModal" class="modal-overlay">
+  <div class="win-modal">
+    <button class="close-btn">&times;</button>
+    <h2>Parabéns!</h2>
+    <p>Você encontrou todas as palavras!</p>
+    <div class="timer">
+      <span id="hours">00</span>:<span id="minutes">00</span>:<span id="seconds">00</span>
+    </div>
+    <p class="record-time">Seu melhor tempo para essa categoria: <span id="bestTime">--:--:--</span></p>
+    <p class="small">Clique em "Iniciar Novo Jogo" para jogar novamente!</p>
+  </div>
+</div>
+  </div>
+
+  <script>
+  (function(){
+    // util
+    function removeAccents(s){ return s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+    function normalizeWord(s){ return removeAccents(s || '').toUpperCase().replace(/[^A-Z]/g,''); }
+    function randInt(max){ return Math.floor(Math.random()*max); }
+    function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=randInt(i+1); [a[i],a[j]]=[a[j],a[i]] } }
+
+    // state
+    let bank = [];
+    let placedWords = [];
+    let grid = [];
+    let size = 12;
+    let startTime = 0;
+    let timerInterval = null;
+
+    // DOM
+    const gridEl = document.getElementById('grid');
+    const gridSizeEl = document.getElementById('gridSize');
+    const categoriesEl = document.getElementById('categories');
+    const wordCountEl = document.getElementById('wordCount');
+    const startBtn = document.getElementById('startBtn');
+    const bankListEl = document.getElementById('bankList');
+    const wordsToFindEl = document.getElementById('wordsToFind');
+    const foundCountEl = document.getElementById('foundCount');
+    const totalCountEl = document.getElementById('totalCount');
+    const statusEl = document.getElementById('status');
+    const showAllBtn = document.getElementById('showAllBtn');
+    const winModal = document.getElementById('winModal');
+    const closeBtn = winModal.querySelector('.close-btn');
+    const hoursEl = document.getElementById('hours');
+    const minutesEl = document.getElementById('minutes');
+    const secondsEl = document.getElementById('seconds');
+    const bestTimeEl = document.getElementById('bestTime');
+
+    // Live Timer DOM
+    const hoursLiveEl = document.getElementById('hours-live');
+    const minutesLiveEl = document.getElementById('minutes-live');
+    const secondsLiveEl = document.getElementById('seconds-live');
+
+    const directions = [
+      {dx:1,dy:0}, {dx:-1,dy:0}, {dx:0,dy:1}, {dx:0,dy:-1},
+      {dx:1,dy:1}, {dx:-1,dy:-1}, {dx:1,dy:-1}, {dx:-1,dy:1}
+    ];
+
+    // fetch JSON
+    async function loadBank(){
+      try{
+        const res = await fetch('palavras.json');
+        bank = await res.json();
+        bank = bank.map(w=>({word: normalizeWord(w.word), cat: w.cat}));
+      }catch(e){
+        alert('Erro ao carregar o banco de palavras.');
+        bank = [];
+      }
+      renderBank();
+      renderCategories();
+    }
+
+    function renderBank(){ bankListEl.innerHTML=''; bank.forEach(w=>{
+      const row = document.createElement('div'); row.className='bankRow';
+      row.innerHTML = `<div style="flex:1"><strong>${w.word}</strong> <div class="small">${w.cat}</div></div>`;
+      bankListEl.appendChild(row);
+    }); }
+
+    function renderCategories(){
+      const cats = Array.from(new Set(bank.map(b=>b.cat))).sort();
+      categoriesEl.innerHTML='';
+      const allOption = document.createElement('option');
+      allOption.value = 'all';
+      allOption.textContent = 'Todas as categorias';
+      categoriesEl.appendChild(allOption);
+      cats.forEach(cat=>{
+        const option = document.createElement('option');
+        option.value = cat;
+        option.textContent = cat;
+        categoriesEl.appendChild(option);
+      });
+    }
+
+    function getSelectedCategories(){
+      const selected = categoriesEl.value;
+      if (selected === 'all') {
+          return Array.from(new Set(bank.map(b=>b.cat)));
+      }
+      return [selected];
+    }
+
+    function makeEmptyGrid(n){ const g = []; for(let y=0;y<n;y++){ g[y]=[]; for(let x=0;x<n;x++) g[y][x]=''; } return g; }
+
+    function tryPlaceWord(g, n, word, maxAttempts=300){
+      const len = word.length; const dirs = directions.slice(); shuffle(dirs);
+      for(let attempt=0; attempt<maxAttempts; attempt++){
+        const dir = dirs[ randInt(dirs.length) ];
+        const dx = dir.dx, dy = dir.dy;
+        const xMin = dx === 1 ? 0 : (dx === -1 ? len-1 : 0);
+        const xMax = dx === 1 ? n - len : (dx === -1 ? n-1 : n-1);
+        const yMin = dy === 1 ? 0 : (dy === -1 ? len-1 : 0);
+        const yMax = dy === 1 ? n - len : (dy === -1 ? n-1 : n-1);
+        if(xMax < xMin || yMax < yMin) continue;
+        const sx = xMin + randInt(xMax - xMin + 1);
+        const sy = yMin + randInt(yMax - yMin + 1);
+        let ok = true;
+        for(let i=0;i<len;i++){ const x=sx+dx*i, y=sy+dy*i; const cell=g[y][x]; if(cell!=='' && cell!==word[i]){ok=false;break;} }
+        if(!ok) continue;
+        const positions = []; for(let i=0;i<len;i++){ const x=sx+dx*i, y=sy+dy*i; g[y][x]=word[i]; positions.push({x,y}); }
+        return {positions,dir,sx,sy};
+      }
+      return null;
+    }
+
+    function startTimer() {
+        if (timerInterval) clearInterval(timerInterval);
+        startTime = Date.now();
+        timerInterval = setInterval(updateTimer, 1000);
+        updateTimer();
+    }
+
+    function stopTimer() {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+
+    function formatTime(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        return {
+            hours: String(hours).padStart(2, '0'),
+            minutes: String(minutes).padStart(2, '0'),
+            seconds: String(seconds).padStart(2, '0')
+        };
+    }
+
+    function updateTimer() {
+        const elapsed = Date.now() - startTime;
+        const time = formatTime(elapsed);
+        // Update both timers
+        hoursEl.textContent = time.hours;
+        minutesEl.textContent = time.minutes;
+        secondsEl.textContent = time.seconds;
+        hoursLiveEl.textContent = time.hours;
+        minutesLiveEl.textContent = time.minutes;
+        secondsLiveEl.textContent = time.seconds;
+    }
+
+    function saveBestTime(category, size, time) {
+        const key = `bestTime_${category}_${size}`;
+        const savedTime = localStorage.getItem(key);
+        if (!savedTime || time < parseInt(savedTime)) {
+            localStorage.setItem(key, time);
+            return true; // É um novo recorde
+        }
+        return false; // Não é um novo recorde
+    }
+
+    function getBestTime(category, size) {
+        const key = `bestTime_${category}_${size}`;
+        const savedTime = localStorage.getItem(key);
+        if (savedTime) {
+            const time = formatTime(parseInt(savedTime));
+            return `${time.hours}:${time.minutes}:${time.seconds}`;
+        }
+        return '--:--:--';
+    }
+
+    function generate(sizeVal){
+      stopTimer();
+      size = parseInt(sizeVal,10); grid = makeEmptyGrid(size); placedWords = [];
+      const chosenCats = getSelectedCategories();
+      let pool = bank.filter(b=> chosenCats.includes(b.cat) ).filter(b=>b.word.length<=size);
+      
+      const numberOfWords = parseInt(wordCountEl.value, 10) || 10;
+      if (pool.length > numberOfWords) {
+          shuffle(pool);
+          pool = pool.slice(0, numberOfWords);
+      }
+      
+      if(pool.length===0){ 
+          statusEl.textContent='Nenhuma palavra disponível para a seleção atual. Tente outras opções.'; 
+          renderEmptyGrid(); 
+          return; 
+      }
+      pool.sort((a,b)=>b.word.length-b.word.length);
+      
+      let successfulPlacements = 0;
+      for(const item of pool){
+        const placed = tryPlaceWord(grid, size, item.word);
+        if(placed) {
+          placedWords.push({word:item.word, positions:placed.positions, found:false});
+          successfulPlacements++;
+        }
+      }
+      
+      const letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      for(let y=0;y<size;y++) for(let x=0;x<size;x++) if(!grid[y][x]||grid[y][x]==='') grid[y][x]=letters[randInt(letters.length)];
+      
+      if (placedWords.length > 0) {
+        statusEl.textContent = `Jogo gerado — ${placedWords.length} palavras colocadas.`;
+        startTimer();
+      } else {
+        statusEl.textContent = 'Não foi possível posicionar as palavras. Tente outra categoria ou um tamanho de grade maior.';
+      }
+      
+      renderGrid(); renderWordsList();
+    }
+
+    function renderEmptyGrid(){ gridEl.innerHTML=''; gridEl.style.gridTemplateColumns=`repeat(${size}, var(--cell-size))`; for(let y=0;y<size;y++){for(let x=0;x<size;x++){const cell=document.createElement('div'); cell.className='cell'; cell.textContent=''; cell.dataset.x=x; cell.dataset.y=y; gridEl.appendChild(cell);}}}
+
+    function renderGrid(){ gridEl.innerHTML=''; gridEl.style.gridTemplateColumns=`repeat(${size}, var(--cell-size))`; for(let y=0;y<size;y++) for(let x=0;x<size;x++){const cell=document.createElement('div'); cell.className='cell'; cell.textContent=grid[y][x]; cell.dataset.x=x; cell.dataset.y=y; gridEl.appendChild(cell);} attachSelectionHandlers(); }
+
+    function renderWordsList(){ wordsToFindEl.innerHTML=''; placedWords.forEach(pw=>{ const div=document.createElement('div'); div.className='wordItem'+(pw.found?' found':''); const left=document.createElement('div'); left.innerHTML=`<span class="word">${pw.word}</span> <div class="small">${pw.positions.length} letras</div>`; const btn=document.createElement('button'); btn.textContent=pw.found?'✓':'—'; btn.disabled=true; div.appendChild(left); div.appendChild(btn); wordsToFindEl.appendChild(div); }); foundCountEl.textContent=placedWords.filter(p=>p.found).length; totalCountEl.textContent=placedWords.length; }
+
+    let isMouseDown=false, startX=0, startY=0, curSelection=[];
+    function attachSelectionHandlers(){ gridEl.addEventListener('mousedown',onGridMouseDown); gridEl.addEventListener('mousemove',onGridMouseMove); document.addEventListener('mouseup',onGridMouseUp); gridEl.addEventListener('dragstart', e=>e.preventDefault()); }
+    function clearSelectionVisual(){ gridEl.querySelectorAll('.cell.selected').forEach(c=>c.classList.remove('selected')); }
+    function clearTempWrong(){ gridEl.querySelectorAll('.cell.wrong').forEach(c=>c.classList.remove('wrong')); }
+    function onGridMouseDown(e){ const cell=e.target.closest('.cell'); if(!cell)return; isMouseDown=true; startX=parseInt(cell.dataset.x,10); startY=parseInt(cell.dataset.y,10); updateSelection(startX,startY,startX,startY);}
+    function onGridMouseMove(e){ if(!isMouseDown)return; const cell=e.target.closest('.cell'); if(!cell)return; const x=parseInt(cell.dataset.x,10),y=parseInt(cell.dataset.y,10); updateSelection(startX,startY,x,y);}
+    function onGridMouseUp(e){ if(!isMouseDown)return; isMouseDown=false; finalizeSelection();}
+    function updateSelection(sx,sy,cx,cy){ clearSelectionVisual(); clearTempWrong(); const dx=cx-sx, dy=cy-sy; if(dx===0&&dy===0){curSelection=[{x:sx,y:sy}]; markSelection(curSelection); return;} const absDx=Math.abs(dx), absDy=Math.abs(dy); let stepX=0, stepY=0, steps=0; if(dx===0){stepX=0; stepY=dy>0?1:-1; steps=absDy;} else if(dy===0){stepY=0; stepX=dx>0?1:-1; steps=absDx;} else if(absDx===absDy){stepX=dx>0?1:-1; stepY=dy>0?1:-1; steps=absDx;} else {curSelection=[]; return;} const path=[]; for(let i=0;i<=steps;i++){ const x=sx+stepX*i,y=sy+stepY*i; path.push({x,y}); } curSelection=path; markSelection(curSelection);}
+    function markSelection(path){ path.forEach(p=>{ const sel=gridEl.querySelector(`.cell[data-x='${p.x}'][data-y='${p.y}']`); if(sel) sel.classList.add('selected'); }); }
+    function finalizeSelection(){ if(!curSelection||curSelection.length===0)return; const letters=curSelection.map(p=>grid[p.y][p.x]).join(''); const rev=letters.split('').reverse().join(''); let matched=null; for(const pw of placedWords){ if(!pw.found){ if(letters===pw.word||rev===pw.word){matched=pw; break;}}} if(matched){ matched.found=true; matched.positions.forEach(p=>{const cell=gridEl.querySelector(`.cell[data-x='${p.x}'][data-y='${p.y}']`); if(cell){cell.classList.add('found');cell.classList.remove('selected');}}); renderWordsList(); checkWin(); } else { curSelection.forEach(p=>{const c=gridEl.querySelector(`.cell[data-x='${p.x}'][data-y='${p.y}']`); if(c)c.classList.add('wrong');}); setTimeout(()=>clearTempWrong(),300); } curSelection=[]; clearSelectionVisual(); }
+
+    function checkWin(){ 
+        const total = placedWords.length;
+        const found = placedWords.filter(p=>p.found).length;
+        foundCountEl.textContent = found;
+        if (found > 0 && found === total) {
+            stopTimer();
+            const elapsedTime = Date.now() - startTime;
+            
+            const category = categoriesEl.value === 'all' ? 'all' : categoriesEl.value;
+            const size = gridSizeEl.value;
+            saveBestTime(category, size, elapsedTime);
+            
+            bestTimeEl.textContent = getBestTime(category, size);
+            
+            winModal.classList.add('active');
+        }
+    }
+    
+    closeBtn.addEventListener('click', () => {
+        winModal.classList.remove('active');
+    });
+
+    startBtn.addEventListener('click',()=>{generate(gridSizeEl.value);});
+    showAllBtn.addEventListener('click',()=>{ placedWords.forEach(pw=>{pw.found=true; pw.positions.forEach(p=>{const cell=gridEl.querySelector(`.cell[data-x='${p.x}'][data-y='${p.y}']`); if(cell){cell.classList.add('found');cell.classList.remove('selected');}});}); renderWordsList(); });
+
+    gridSizeEl.addEventListener('change',()=>generate(gridSizeEl.value));
+    categoriesEl.addEventListener('change',()=>generate(gridSizeEl.value));
+    wordCountEl.addEventListener('change',()=>generate(gridSizeEl.value));
+
+    // init
+    loadBank();
+  })();
+</script>
+</body>
+</html>
